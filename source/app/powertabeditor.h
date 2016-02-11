@@ -39,7 +39,7 @@ class QActionGroup;
 class RecentFiles;
 class ScoreArea;
 class ScoreLocation;
-class SettingsPubSub;
+class SettingsManager;
 class TuningDictionary;
 class UndoManager;
 
@@ -72,6 +72,10 @@ private slots:
     /// Closes the current document.
     /// @return True if the document was closed successfully.
     bool closeCurrentTab();
+
+    /// Saves the current document.
+    /// @return True if the file was successfully saved.
+    bool saveFile();
 
     /// Saves the current document to a new filename.
     /// @return True if the file was successfully saved.
@@ -113,7 +117,7 @@ private slots:
     void editFileInformation();
 
     /// Starts or stops playback of the score.
-    void startStopPlayback();
+    void startStopPlayback(bool from_measure_start = false);
 
     /// Redraws only the given system.
     void redrawSystem(int);
@@ -252,6 +256,8 @@ private slots:
     void removeInstrument(int index);
     /// Shows a dialog to view or edit the tuning dictionary.
     void showTuningDictionary();
+    /// Shows a dialog to edit the score's view filters.
+    void editViewFilters();
 
 protected:
     /// Handle key presses for 0-9 when entering tab numbers.
@@ -259,6 +265,12 @@ protected:
 
     /// Performs some final actions before exiting.
     virtual void closeEvent(QCloseEvent*) override;
+
+    /// Accept drag events.
+    virtual void dragEnterEvent(QDragEnterEvent *event) override;
+
+    /// Open files that have been dropped.
+    virtual void dropEvent(QDropEvent *event) override;
 
 private:
     /// Returns the application name & version (e.g. 'Power Tab Editor 2.0').
@@ -272,6 +284,14 @@ private:
     void createMixer();
     /// Build the instrument panel.
     void createInstrumentPanel();
+
+    /// Load any custom keyboard shortcuts.
+    void loadKeyboardShortcuts();
+    /// Save any custom keyboard shortcuts.
+    void saveKeyboardShortcuts() const;
+    /// Return a list of all actions.
+    std::vector<const Command *> getCommands() const;
+    std::vector<Command *> getCommands();
 
     /// Helper function to create a wrapper around QAction that supports
     /// customizable shortcuts.
@@ -319,8 +339,14 @@ private:
     void toggleMetronome();
     /// Sets the current voice that is being edited.
     void updateActiveVoice(int);
+    /// Sets the current score filter.
+    void updateActiveFilter(int);
     /// Updates the playback widget with the caret's current location.
     void updateLocationLabel();
+
+    /// Saves the current document to the specified path.
+    /// @return True if the file was successfully saved.
+    bool saveFile(QString path);
 
     /// Adds or removes a rest at the current location.
     void editRest(Position::DurationType duration);
@@ -356,12 +382,12 @@ private:
     /// Returns the location of the caret within the active document.
     ScoreLocation &getLocation();
 
+    std::unique_ptr<SettingsManager> mySettingsManager;
     std::unique_ptr<DocumentManager> myDocumentManager;
     std::unique_ptr<FileFormatManager> myFileFormatManager;
     std::unique_ptr<UndoManager> myUndoManager;
     std::unique_ptr<MidiPlayer> myMidiPlayer;
     std::unique_ptr<TuningDictionary> myTuningDictionary;
-    std::shared_ptr<SettingsPubSub> mySettingsPubSub;
     PlayerEditPubSub myPlayerEditPubSub;
     PlayerRemovePubSub myPlayerRemovePubSub;
     InstrumentEditPubSub myInstrumentEditPubSub;
@@ -385,6 +411,7 @@ private:
     Command *myNewDocumentCommand;
     Command *myOpenFileCommand;
     Command *myCloseTabCommand;
+    Command *mySaveCommand;
     Command *mySaveAsCommand;
     Command *myPrintCommand;
     Command *myPrintPreviewCommand;
@@ -405,6 +432,7 @@ private:
 
     QMenu *myPlaybackMenu;
     Command *myPlayPauseCommand;
+    Command *myPlayFromStartOfMeasureCommand;
     Command *myRewindCommand;
     Command *myMetronomeCommand;
 
@@ -544,6 +572,7 @@ private:
     Command *myAddInstrumentCommand;
     Command *myPlayerChangeCommand;
     Command *myShowTuningDictionaryCommand;
+    Command *myEditViewFiltersCommand;
 
     QMenu *myWindowMenu;
     Command *myNextTabCommand;

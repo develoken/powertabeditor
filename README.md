@@ -1,7 +1,7 @@
 # Power Tab Editor
 
 [![Build Status](https://travis-ci.org/powertab/powertabeditor.svg?branch=master)](https://travis-ci.org/powertab/powertabeditor)
-[![GitHub release](https://img.shields.io/github/release/powertab/powertabeditor.svg?style=flat)](https://github.com/powertab/powertabeditor/releases)
+[![Build status](https://ci.appveyor.com/api/projects/status/9q4cnu1l6rjxg96h?svg=true)](https://ci.appveyor.com/project/cameronwhite/powertabeditor)
 
 ### Users
 * New user? Read the [intro page](https://github.com/powertab/powertabeditor/wiki/Power-Tab-Editor-2.0,-Here-at-last!) to learn more about the project!
@@ -23,8 +23,7 @@ If you've already cloned the repository, you can run `git submodule init && git 
 * [CMake](http://www.cmake.org/) >= 2.8.9
 * [Boost 1.55](http://www.boost.org/) or greater
   * Earlier versions may work, but are currently untested
-* [Qt 5.x](http://qt-project.org/)
-  * If you are compiling with Clang, Qt 5.2 or higher is required.
+* [Qt 5.4](http://qt-project.org/) or greater
 * [zlib](http://www.zlib.net/)
 * (Linux only) - ALSA library (e.g. `libasound2-dev`)
 * (Linux only) - MIDI sequencer (e.g. `timidity`)
@@ -45,14 +44,14 @@ If you've already cloned the repository, you can run `git submodule init && git 
   * Install the `msvc2013 64-bit` component (or `msvc2013 32-bit` for a 32-bit build)
 * Compiling Qt (optional):
   * You may want to do this instead if you intend on building the installer so that Qt can be built without dependencies on huge libraries such as `icu`.
-  * [Download](http://qt-project.org/downloads) and extract the source code to a directory such as `C:\Qt\5.2.0`.
+  * [Download](http://qt-project.org/downloads) and extract the source code.
   * If necessary, install [Python 2.7.x](https://www.python.org/downloads/) and add it to your PATH.
-  * Open a command prompt (e.g. VS2013 x64 Native Tools Command Prompt) and navigate to the Qt directory.
-  * Run `configure -opensource -nomake examples -debug-and-release -mp -no-icu -c++11` and accept the license agreement.
-  * Run `nmake` and grab a cup of coffee ...
+  * Open a command prompt (e.g. VS2013 x64 Native Tools Command Prompt) and navigate to the Qt source directory.
+  * Run `configure -opensource -nomake examples -nomake tests -skip qtwebkit -skip qtwebengine -skip qtconnectivity -skip qtandroidextras -skip qtlocation -skip qtscript -opengl desktop -debug-and-release -mp -no-icu -c++11 -prefix C:\Qt\5.4.1` and accept the license agreement.
+  * Run `nmake` and `nmake install` and grab a cup of coffee ...
 * Install and open CMake, and browse to select the location of the root directory (e.g. `$HOME/Documents/GitHub/powertabeditor`).
 * Set the build directory to `$HOME/Documents/GitHub/powertabeditor/build`.
-* Use the "Add Entry" button to set the `STRING` `CMAKE_PREFIX_PATH` to the `cmake` directory inside Qt's installation directory (e.g. `C:\Qt\5.2.0\qtbase\lib\cmake`)
+* Use the "Add Entry" button to set the `STRING` `CMAKE_PREFIX_PATH` to the `cmake` directory inside Qt's installation directory (e.g. `C:\Qt\5.4.1\lib\cmake`)
 * For Windows XP support, set `CMAKE_GENERATOR_TOOLSET` to `v120_xp`.
 * Press `Configure` and select your compiler version (e.g. `Visual Studio 12 Win64`, or `Visual Studio 12` for a 32-bit build) and then press `Generate`
 * Open the resulting solution (`powertabeditor.sln`) and select `Build Solution` from the `Build` menu.
@@ -60,14 +59,16 @@ If you've already cloned the repository, you can run `git submodule init && git 
 
 #### Linux:
 * These instructions assume a recent Ubuntu/Debian-based system, but the package names should be similar for other package managers.
-  * For older Ubuntu systems (such as Ubuntu 12.04) - you may need to [add some PPAs](https://github.com/powertab/powertabeditor/blob/master/.travis.yml) to get updated versions of the dependencies.
+  * For older Ubuntu systems (such as Ubuntu 12.04) - you may need to [add some PPAs](https://github.com/powertab/powertabeditor/blob/master/.travis/setup_linux.sh) to get updated versions of the dependencies.
 * Install dependencies:
   * `sudo apt-get update`
-  * `sudo apt-get install cmake qtbase5-dev libboost1.55-dev libboost-date-time1.55-dev libboost-iostreams1.55-dev libboost-program-options1.55-dev libboost-regex1.55-dev libasound2-dev timidity`
+  * `sudo apt-get install cmake qtbase5-dev libboost-dev libboost-date-time-dev libboost-filesystem-dev libboost-iostreams-dev libboost-program-options-dev libboost-regex-dev libasound2-dev libiberty-dev binutils-dev rapidjson-dev libpugixml-dev, catch, librtmidi-dev`
+  * `sudo apt-get install timidity` - timidity is not required for building, but is a good sequencer for MIDI playback.
   * Optionally, use [Ninja](http://martine.github.io/ninja/) instead of `make` (`sudo apt-get install ninja-build`)
 * Build:
   * `mkdir build && cd build`
   * `cmake ..`
+    * Add `-DCMAKE_INSTALL_PREFIX=/some/path` to customize the install directory.
     * Add `-DCMAKE_BUILD_TYPE=Debug` for a debug build instead of a `Release` build.
     * Add `-DCMAKE_CXX_COMPILER=clang++` to compile with Clang.
     * Add `-G Ninja` to generate [Ninja](http://martine.github.io/ninja/) build files.
@@ -75,24 +76,26 @@ If you've already cloned the repository, you can run `git submodule init && git 
 * Run:
   * `./bin/powertabeditor`
   * `./bin/pte_tests` to run the unit tests.
+* Install:
+  * `make install` or `ninja install`
 
 #### OS X:
-* Currently tested with Mac OS X 10.9.2 only.
+* Tested with Mac OS X 10.9 and above.
 * Install Xcode along with its Command Line Tools.
-* Install CMake, Qt 5.2+, libbfd, and Boost
-  * Install [Homebrew](http://brew.sh/) and run `./osx/setup.sh`.
-  * Install [CMake](http://www.cmake.org/).
-* Build (adapt paths to your setup) in `source/` directory
-  * `export CC=/usr/bin/clang`
-  * `export CXX=/usr/bin/clang++`
-  * `export Qt5Widgets_DIR=<PATH_TO_Qt>/clang_64/lib/cmake/Qt5Widgets`
-  * `export Qt5Core_DIR=<PATH_TO_Qt>/clang_64/lib/cmake/Qt5Core`
-  * `export BOOST_ROOT=/usr/local/Cellar/boost/1.55.0_1`
-  * `export BOOST_LIBRARY_DIR=/usr/local/Cellar/boost/1.55.0_1/lib`
-  * `export CMAKE_LIBRARY_PATH="/usr/local/Cellar/boost/1.55.0_1/lib:$CMAKE_LIBRARY_PATH"` 
-  * `cmake ..`
-  * `make`
+* Install CMake:
+  * If you prefer a GUI, download the [CMake installer](http://www.cmake.org).
+  * Otherwise, run `brew install cmake`
+* Install dependencies:
+  * `brew install boost qt5`
+* Build:
+  * `mkdir build && cd build`
+  * `cmake -DCMAKE_PREFIX_PATH=/usr/local/opt/qt5/lib/cmake ..`
+    * If necessary, define `BOOST_ROOT` to point to the root directory where Boost was installed (e.g. `/usr/local/opt/boost`).
+    * To generate an Xcode project, add `-G Xcode`.
+  * For a Makefile build, run `make -j4`.
+  * For Xcode, open and build `build/powertabeditor.xcodeproj`.
 * Run:
   * `./bin/powertabeditor`
-  * `./bin/pte_tests` to run the unit tests.
+  * `./bin/pte_tests` or `make test` to run the unit tests.
+  * For Xcode, select `Product/Scheme/powertabeditor` and then `Product/Run`.
   

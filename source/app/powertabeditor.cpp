@@ -14,7 +14,7 @@
   * You should have received a copy of the GNU General Public License
   * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
-  
+
 #include "powertabeditor.h"
 
 #include <actions/addalternateending.h>
@@ -47,6 +47,7 @@
 #include <actions/editstaff.h>
 #include <actions/edittabnumber.h>
 #include <actions/edittimesignature.h>
+#include <actions/editviewfilters.h>
 #include <actions/polishscore.h>
 #include <actions/polishsystem.h>
 #include <actions/removealternateending.h>
@@ -76,14 +77,16 @@
 #include <app/clipboard.h>
 #include <app/command.h>
 #include <app/documentmanager.h>
+#include <app/paths.h>
 #include <app/pubsub/clickpubsub.h>
-#include <app/pubsub/settingspubsub.h>
 #include <app/recentfiles.h>
 #include <app/scorearea.h>
 #include <app/settings.h>
+#include <app/settingsmanager.h>
 #include <app/tuningdictionary.h>
 
 #include <audio/midiplayer.h>
+#include <audio/settings.h>
 
 #include <boost/lexical_cast.hpp>
 #include <boost/range/algorithm/transform.hpp>
@@ -114,6 +117,7 @@
 #include <dialogs/timesignaturedialog.h>
 #include <dialogs/trilldialog.h>
 #include <dialogs/tuningdictionarydialog.h>
+#include <dialogs/viewfilterdialog.h>
 
 #include <formats/fileformatmanager.h>
 
@@ -126,12 +130,13 @@
 #include <QKeyEvent>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPrinter>
 #include <QPrintDialog>
 #include <QPrintPreviewDialog>
 #include <QScrollArea>
-#include <QSettings>
 #include <QTabBar>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <score/utils.h>
@@ -143,16 +148,12 @@
 
 PowerTabEditor::PowerTabEditor()
     : QMainWindow(nullptr),
+      mySettingsManager(new SettingsManager()),
       myDocumentManager(new DocumentManager()),
-      myFileFormatManager(new FileFormatManager()),
+      myFileFormatManager(new FileFormatManager(*mySettingsManager)),
       myUndoManager(new UndoManager()),
       myTuningDictionary(new TuningDictionary()),
-      mySettingsPubSub(std::make_shared<SettingsPubSub>()),
       myIsPlaying(false),
-      myPreviousDirectory(
-          QSettings()
-              .value(Settings::APP_PREVIOUS_DIRECTORY, QDir::homePath())
-              .toString()),
       myRecentFiles(nullptr),
       myActiveDurationType(Position::EighthNote),
       myTabWidget(nullptr),
@@ -164,6 +165,8 @@ PowerTabEditor::PowerTabEditor()
       myPlaybackArea(nullptr)
 {
     this->setWindowIcon(QIcon(":icons/app_icon.png"));
+
+    setAcceptDrops(true);
 
     // Load the music notation font.
     QFontDatabase::addApplicationFont(":fonts/emmentaler-13.otf");
@@ -178,22 +181,28 @@ PowerTabEditor::PowerTabEditor()
             SLOT(updateModified(bool)));
 
     myTuningDictionary->loadInBackground();
+    mySettingsManager->load(Paths::getConfigDir());
 
     createMixer();
     createInstrumentPanel();
     createCommands();
+    loadKeyboardShortcuts();
     createMenus();
 
     // Set up the recent files menu.
-    myRecentFiles = new RecentFiles(myRecentFilesMenu, this);
+    myRecentFiles =
+        new RecentFiles(*mySettingsManager, myRecentFilesMenu, this);
     connect(myRecentFiles, SIGNAL(fileSelected(QString)), this,
             SLOT(openFile(QString)));
 
     createTabArea();
 
+    auto settings = mySettingsManager->getReadHandle();
+    myPreviousDirectory =
+        QString::fromStdString(settings->get(Settings::PreviousDirectory));
+
     // Restore the state of any dock widgets.
-    QSettings settings;
-    restoreState(settings.value(Settings::APP_WINDOW_STATE).toByteArray());
+    restoreState(settings->get(Settings::WindowState));
 
     setCentralWidget(myPlaybackArea);
     setMinimumSize(800, 600);
@@ -213,7 +222,7 @@ void PowerTabEditor::openFiles(const QStringList &files)
 
 void PowerTabEditor::createNewDocument()
 {
-    myDocumentManager->addDefaultDocument();
+    myDocumentManager->addDefaultDocument(*mySettingsManager);
     setupNewTab();
 }
 
@@ -229,7 +238,16 @@ void PowerTabEditor::openFile(QString filename)
     if (filename.isEmpty())
         return;
 
+    int validationResult = myDocumentManager->findDocument(filename.toStdString());
+    if (validationResult > -1)
+    {
+        qDebug() << "File: " << filename << " is already open";
+        myTabWidget->setCurrentIndex(validationResult);
+        return;
+    }
+
     auto start = std::chrono::high_resolution_clock::now();
+
     qDebug() << "Opening file: " << filename;
 
     QFileInfo fileInfo(filename);
@@ -243,24 +261,29 @@ void PowerTabEditor::openFile(QString filename)
         return;
     }
 
-    Document &doc = myDocumentManager->addDocument();
-    if (myFileFormatManager->importFile(doc.getScore(), filename.toStdString(),
-                                        *format, this))
+    try
     {
+        Document &doc = myDocumentManager->addDocument();
+        myFileFormatManager->importFile(doc.getScore(), filename.toStdString(),
+                                        *format);
         auto end = std::chrono::high_resolution_clock::now();
         qDebug() << "File loaded in"
-                 << std::chrono::duration_cast<std::chrono::milliseconds>(
-                        end - start).count() << "ms";
+                 << std::chrono::duration_cast<std::chrono::milliseconds>(end - start) .count()
+                 << "ms";
 
         doc.setFilename(filename.toStdString());
         setPreviousDirectory(filename);
         myRecentFiles->add(filename);
         setupNewTab();
     }
-    else
+    catch (const std::exception &e)
     {
         myDocumentManager->removeDocument(
-                    myDocumentManager->getCurrentDocumentIndex());
+            myDocumentManager->getCurrentDocumentIndex());
+
+        QMessageBox::warning(
+            this, tr("Error Opening File"),
+            tr("Error opening file: %1").arg(QString(e.what())));
     }
 }
 
@@ -270,10 +293,10 @@ void PowerTabEditor::switchTab(int index)
 
     if (index != -1)
     {
-        const Score &score = myDocumentManager->getCurrentDocument().getScore();
-        myMixer->reset(score);
-        myInstrumentPanel->reset(score);
-        myPlaybackWidget->reset(score);
+        const Document &doc = myDocumentManager->getCurrentDocument();
+        myMixer->reset(doc.getScore());
+        myInstrumentPanel->reset(doc.getScore());
+        myPlaybackWidget->reset(doc);
         updateLocationLabel();
     }
     else
@@ -303,7 +326,7 @@ bool PowerTabEditor::closeTab(int index)
         const int ret = msg.exec();
         if (ret == QMessageBox::Save)
         {
-            if (!saveFileAs())
+            if (!saveFile())
                 return false;
         }
         else if (ret == QMessageBox::Cancel)
@@ -334,58 +357,101 @@ bool PowerTabEditor::closeCurrentTab()
     return closeTab(myDocumentManager->getCurrentDocumentIndex());
 }
 
-bool PowerTabEditor::saveFileAs()
+bool PowerTabEditor::saveFile()
 {
-    const QString filter(QString::fromStdString(
-                             myFileFormatManager->exportFileFilter()));
-    QString path = QFileDialog::getSaveFileName(this, tr("Save As"),
-                                                myPreviousDirectory, filter);
+    const Document &doc = myDocumentManager->getCurrentDocument();
+    if (!doc.hasFilename())
+        return saveFileAs();
 
-    if (!path.isEmpty())
+    const QString filename = QString::fromStdString(doc.getFilename());
+    return QFileInfo(filename).suffix() == "pt2" ? saveFile(filename)
+                                                 : saveFileAs();
+}
+
+bool PowerTabEditor::saveFile(QString path)
+{
+    QFileInfo info(path);
+    QString extension = info.suffix();
+    Q_ASSERT(!extension.isEmpty());
+
+    boost::optional<FileFormat> format =
+        myFileFormatManager->findFormat(extension.toStdString());
+    if (!format)
     {
-        // If the user didn't type the extension, add it in.
-        QFileInfo info(path);
-        QString extension = info.suffix();
-        if (extension.isEmpty())
-        {
-            extension = "pt2";
-            path += "." + extension;
-        }
-
-        boost::optional<FileFormat> format = myFileFormatManager->findFormat(
-                    extension.toStdString());
-        if (!format)
-        {
-            QMessageBox::warning(this, tr("Error Saving File"),
-                                 tr("Unsupported file type."));
-            return false;
-        }
-
-        const std::string newPath = path.toStdString();
-        Document &doc = myDocumentManager->getCurrentDocument();
-
-        if (myFileFormatManager->exportFile(doc.getScore(), newPath, *format))
-        {
-            doc.setFilename(newPath);
-
-            // Update window title and tab bar.
-            updateWindowTitle();
-            const QString fileName = QFileInfo(path).fileName();
-            myTabWidget->setTabText(myTabWidget->currentIndex(), fileName);
-            myTabWidget->setTabToolTip(myTabWidget->currentIndex(), fileName);
-
-            // Add to the recent files list and update the last used directory.
-            myRecentFiles->add(path);
-            setPreviousDirectory(path);
-
-            // Mark the file as being in an unmodified state.
-            myUndoManager->setClean();
-
-            return true;
-        }
+        QMessageBox::warning(this, tr("Error Saving File"),
+                             tr("Unsupported file type."));
+        return false;
     }
 
-    return false;
+    const std::string path_str = path.toStdString();
+    Document &doc = myDocumentManager->getCurrentDocument();
+
+    try
+    {
+        myFileFormatManager->exportFile(doc.getScore(), path_str, *format);
+    }
+    catch (const std::exception &e)
+    {
+        QMessageBox::warning(
+            this, tr("Error Saving File"),
+            tr("Error saving file: %1").arg(QString(e.what())));
+
+        return false;
+    }
+
+    if (extension == "pt2")
+    {
+        doc.setFilename(path_str);
+
+        // Update window title and tab bar.
+        updateWindowTitle();
+        const QString filename = info.fileName();
+        myTabWidget->setTabText(myTabWidget->currentIndex(), filename);
+        myTabWidget->setTabToolTip(myTabWidget->currentIndex(), filename);
+
+        // Add to the recent files list and update the last used directory.
+        myRecentFiles->add(path);
+        setPreviousDirectory(path);
+
+        // Mark the file as being in an unmodified state.
+        myUndoManager->setClean();
+    }
+
+    return true;
+}
+
+bool PowerTabEditor::saveFileAs()
+{
+    const QString filter =
+        QString::fromStdString(myFileFormatManager->exportFileFilter());
+
+    QFileDialog dialog(this, tr("Save As"), myPreviousDirectory, filter);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+
+    if (dialog.exec() == QDialog::Accepted)
+    {
+        QString path = dialog.selectedFiles().first();
+        if (path.isEmpty())
+            return false;
+
+        // Add a suitable file extension if necessary.
+        QFileInfo info(path);
+        if (info.suffix().isEmpty())
+        {
+            const QString file_filter = dialog.selectedNameFilter();
+            QRegExp regex("\\*.(\\w+)");
+            if (regex.indexIn(file_filter, 0) < 0)
+                return false;
+
+            const QString extension = regex.cap(1);
+            path += ".";
+            path += extension;
+        }
+
+        return saveFile(path);
+    }
+    else
+        return false;
 }
 
 void PowerTabEditor::updateModified(bool clean)
@@ -407,14 +473,15 @@ void PowerTabEditor::cycleTab(int offset)
 
 void PowerTabEditor::editKeyboardShortcuts()
 {
-    KeyboardSettingsDialog dialog(
-        this, findChildren<Command *>().toVector().toStdVector());
+    KeyboardSettingsDialog dialog(this, getCommands());
     dialog.exec();
+
+    saveKeyboardShortcuts();
 }
 
 void PowerTabEditor::editPreferences()
 {
-    PreferencesDialog dialog(this, mySettingsPubSub, *myTuningDictionary);
+    PreferencesDialog dialog(this, *mySettingsManager, *myTuningDictionary);
     dialog.exec();
 }
 
@@ -498,7 +565,7 @@ void PowerTabEditor::editFileInformation()
     }
 }
 
-void PowerTabEditor::startStopPlayback()
+void PowerTabEditor::startStopPlayback(bool from_measure_start)
 {
     myIsPlaying = !myIsPlaying;
 
@@ -507,12 +574,19 @@ void PowerTabEditor::startStopPlayback()
         // Start up the midi player.
         myPlayPauseCommand->setText(tr("Pause"));
 
+        // Move the caret to the start of the current bar if necessary.
+        if (from_measure_start)
+        {
+            moveCaretToPrevBar();
+            moveCaretToNextBar();
+        }
+
         getCaret().setIsInPlaybackMode(true);
         myPlaybackWidget->setPlaybackMode(true);
 
         const ScoreLocation &location = getLocation();
         myMidiPlayer.reset(new MidiPlayer(
-            location.getScore(), location.getSystemIndex(),
+            *mySettingsManager, location.getScore(), location.getSystemIndex(),
             location.getPositionIndex(), myPlaybackWidget->getPlaybackSpeed()));
 
         connect(myMidiPlayer.get(), SIGNAL(playbackSystemChanged(int)), this,
@@ -523,6 +597,10 @@ void PowerTabEditor::startStopPlayback()
                 SLOT(startStopPlayback()));
         connect(myPlaybackWidget, &PlaybackWidget::playbackSpeedChanged,
                 myMidiPlayer.get(), &MidiPlayer::changePlaybackSpeed);
+
+        connect(myMidiPlayer.get(), &MidiPlayer::error, this, [=](const QString &msg) {
+            QMessageBox::critical(this, tr("Midi Error"), msg);
+        });
 
         myMidiPlayer->start();
     }
@@ -554,14 +632,15 @@ void PowerTabEditor::redrawSystem(int index)
 
 void PowerTabEditor::redrawScore()
 {
+    Document &doc = myDocumentManager->getCurrentDocument();
+    doc.validateViewOptions();
     getCaret().moveToValidPosition();
-    getScoreArea()->renderDocument(myDocumentManager->getCurrentDocument());
+    getScoreArea()->renderDocument(doc);
     updateCommands();
 
-    const Score &score = myDocumentManager->getCurrentDocument().getScore();
-    myMixer->reset(score);
-    myInstrumentPanel->reset(score);
-    myPlaybackWidget->reset(score);
+    myMixer->reset(doc.getScore());
+    myInstrumentPanel->reset(doc.getScore());
+    myPlaybackWidget->reset(doc);
 }
 
 void PowerTabEditor::moveCaretToStart()
@@ -788,7 +867,8 @@ void PowerTabEditor::editTextItem()
 
 void PowerTabEditor::insertSystemAtEnd()
 {
-    insertSystem(getLocation().getScore().getSystems().size());
+    insertSystem(
+        static_cast<int>(getLocation().getScore().getSystems().size()));
 }
 
 void PowerTabEditor::insertSystemBefore()
@@ -832,49 +912,69 @@ void PowerTabEditor::updateNoteDuration(Position::DurationType duration)
 
     if (!getLocation().getSelectedPositions().empty())
     {
-        myUndoManager->push(new EditNoteDuration(getLocation(), duration, false),
-                            getLocation().getSystemIndex());
+        myUndoManager->push(
+            new EditNoteDuration(getLocation(), duration, false),
+            getLocation().getSystemIndex());
     }
+    else
+        updateCommands();
+}
+
+static Position::DurationType changeDuration(Position::DurationType duration,
+                                             bool increase)
+{
+    if ((increase && duration == Position::WholeNote) ||
+        (!increase && duration == Position::SixtyFourthNote))
+    {
+        return duration;
+    }
+
+    return static_cast<Position::DurationType>(increase ? duration / 2
+                                                        : duration * 2);
 }
 
 void PowerTabEditor::changeNoteDuration(bool increase)
 {
-    if (getLocation().getSelectedPositions().empty())
+    std::vector<Position *> selected_positions =
+        getLocation().getSelectedPositions();
+
+    if (selected_positions.empty())
     {
         if (increase && myActiveDurationType == Position::WholeNote)
             return;
         if (!increase && myActiveDurationType == Position::SixtyFourthNote)
             return;
 
-        updateNoteDuration(static_cast<Position::DurationType>(
-                               increase ? myActiveDurationType >> 1 :
-                                          myActiveDurationType << 1));
-        return;
+        updateNoteDuration(changeDuration(myActiveDurationType, increase));
     }
-
-    myUndoManager->beginMacro(tr("Edit Note Duration"));
-
-    // Increase the duration of each selected position.
-    for (const Position *pos : getLocation().getSelectedPositions())
+    else
     {
-        ScoreLocation location(getLocation());
-        location.setPositionIndex(pos->getPosition());
-        location.setSelectionStart(pos->getPosition());
+        myUndoManager->beginMacro(tr("Edit Note Duration"));
 
-        Position::DurationType duration = pos->getDurationType();
-        if (increase && duration == Position::WholeNote)
-            continue;
-        if (!increase && duration == Position::SixtyFourthNote)
-            continue;
+        // Increase the duration of each selected position.
+        for (const Position *pos : selected_positions)
+        {
+            ScoreLocation location(getLocation());
+            location.setPositionIndex(pos->getPosition());
+            location.setSelectionStart(pos->getPosition());
 
-        myUndoManager->push(new EditNoteDuration(location,
-                static_cast<Position::DurationType>(increase ? duration >> 1 :
-                                                               duration << 1),
-                                                 false),
-                            location.getSystemIndex());
+            Position::DurationType new_duration =
+                changeDuration(pos->getDurationType(), increase);
+
+            if (new_duration == pos->getDurationType())
+                continue;
+
+            // Update the active note duration to match the last selected note.
+            if (pos == selected_positions.back())
+                updateNoteDuration(new_duration);
+
+            myUndoManager->push(
+                new EditNoteDuration(location, new_duration, false),
+                location.getSystemIndex());
+        }
+
+        myUndoManager->endMacro();
     }
-
-    myUndoManager->endMacro();
 }
 
 void PowerTabEditor::addDot()
@@ -1027,7 +1127,13 @@ void PowerTabEditor::editIrregularGrouping(bool setAsTriplet)
 
 void PowerTabEditor::addRest()
 {
-    editRest(myActiveDurationType);
+    ScoreLocation &location = getLocation();
+    const Position *pos = location.getPosition();
+    const Position::DurationType duration =
+        pos ? pos->getDurationType() : myActiveDurationType;
+
+    myUndoManager->push(new AddRest(location, duration),
+                        location.getSystemIndex());
 }
 
 void PowerTabEditor::editMultiBarRest()
@@ -1405,11 +1511,8 @@ void PowerTabEditor::addPlayer()
         }
     }
 
-    QSettings settings;
-    player.setTuning(settings.value(
-            Settings::DEFAULT_INSTRUMENT_TUNING,
-            QVariant::fromValue(Settings::DEFAULT_INSTRUMENT_TUNING_DEFAULT)
-        ).value<Tuning>());
+    auto settings = mySettingsManager->getReadHandle();
+    player.setTuning(settings->get(Settings::DefaultTuning));
 
     myUndoManager->push(new AddPlayer(score, player),
                         UndoManager::AFFECTS_ALL_SYSTEMS);
@@ -1419,8 +1522,9 @@ void PowerTabEditor::addInstrument()
 {
     ScoreLocation &location = getLocation();
     Score &score = location.getScore();
-    QSettings settings;
     Instrument instrument;
+
+    auto settings = mySettingsManager->getReadHandle();
 
     // Create a unique name for the instrument.
     {
@@ -1431,14 +1535,13 @@ void PowerTabEditor::addInstrument()
             return instrument.getDescription();
         });
 
-        const std::string defaultName = settings.value(
-            Settings::DEFAULT_INSTRUMENT_NAME,
-            Settings::DEFAULT_INSTRUMENT_NAME_DEFAULT).toString().toStdString();
+        const std::string default_name =
+            settings->get(Settings::DefaultInstrumentName);
 
         size_t i = score.getInstruments().size() + 1;
         while (true)
         {
-            const std::string name = defaultName + " " + std::to_string(i);
+            const std::string name = default_name + " " + std::to_string(i);
 
             if (std::find(names.begin(), names.end(), name) == names.end())
             {
@@ -1450,9 +1553,7 @@ void PowerTabEditor::addInstrument()
         }
     }
 
-    instrument.setMidiPreset(
-        settings.value(Settings::DEFAULT_INSTRUMENT_PRESET,
-                       Settings::DEFAULT_INSTRUMENT_PRESET_DEFAULT).toInt());
+    instrument.setMidiPreset(settings->get(Settings::DefaultInstrumentPreset));
 
     myUndoManager->push(new AddInstrument(location.getScore(), instrument),
                         UndoManager::AFFECTS_ALL_SYSTEMS);
@@ -1537,6 +1638,18 @@ void PowerTabEditor::showTuningDictionary()
     dialog.exec();
 }
 
+void PowerTabEditor::editViewFilters()
+{
+    ViewFilterDialog dialog(this);
+    ViewFilterPresenter presenter(dialog, getLocation().getScore());
+    if (presenter.exec())
+    {
+        myUndoManager->push(new EditViewFilters(getLocation().getScore(),
+                                                presenter.getFilters()),
+                            UndoManager::AFFECTS_ALL_SYSTEMS);
+    }
+}
+
 bool PowerTabEditor::eventFilter(QObject *object, QEvent *event)
 {
     // Don't handle key presses during playback.
@@ -1593,17 +1706,42 @@ void PowerTabEditor::closeEvent(QCloseEvent *event)
 
     myTuningDictionary->save();
 
-    QSettings settings;
-    settings.setValue(Settings::APP_WINDOW_STATE, saveState());
+    {
+        auto settings = mySettingsManager->getWriteHandle();
+        settings->set(Settings::WindowState, saveState());
+    }
+
+    mySettingsManager->save(Paths::getConfigDir());
 
     QMainWindow::closeEvent(event);
+}
+
+void PowerTabEditor::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData()->hasUrls())
+    {
+        for (const QUrl &url : event->mimeData()->urls())
+        {
+            if (!url.isLocalFile())
+                return;
+        }
+
+        event->acceptProposedAction();
+    }
+}
+
+void PowerTabEditor::dropEvent(QDropEvent *event)
+{
+    Q_ASSERT(event->mimeData()->hasUrls());
+    for (const QUrl &url : event->mimeData()->urls())
+        openFile(url.toLocalFile());
 }
 
 QString PowerTabEditor::getApplicationName() const
 {
     QString name = QString("%1 %2 Beta").arg(
-                QCoreApplication::applicationName(),
-                QCoreApplication::applicationVersion());
+                AppInfo::APPLICATION_NAME,
+                AppInfo::APPLICATION_VERSION);
 
 #ifdef VERSION
     name += QString(" (v") + BOOST_STRINGIZE(VERSION) + ")";
@@ -1651,6 +1789,10 @@ void PowerTabEditor::createCommands()
                                     Qt::CTRL + Qt::Key_W, this);
     connect(myCloseTabCommand, SIGNAL(triggered()), this,
             SLOT(closeCurrentTab()));
+
+    mySaveCommand = new Command(tr("Save"), "File.Save",
+                                QKeySequence::Save, this);
+    connect(mySaveCommand, SIGNAL(triggered()), this, SLOT(saveFile()));
 
     mySaveAsCommand = new Command(tr("Save As..."), "File.SaveAs",
                                   QKeySequence::SaveAs, this);
@@ -1724,8 +1866,21 @@ void PowerTabEditor::createCommands()
     connect(myPlayPauseCommand, SIGNAL(triggered()), this,
             SLOT(startStopPlayback()));
 
+#ifdef Q_OS_MAC
+    // Command-Space is used by Spotlight.
+    QKeySequence play_start_seq = Qt::META + Qt::Key_Space;
+#else
+    QKeySequence play_start_seq = Qt::CTRL + Qt::Key_Space;
+#endif
+    myPlayFromStartOfMeasureCommand = new Command(
+        tr("Play From Start Of Measure"), "Playback.PlayFromStartOfMeasure",
+        play_start_seq, this);
+    connect(myPlayFromStartOfMeasureCommand, &QAction::triggered, [this]() {
+        startStopPlayback(/* from_measure_start */ true);
+    });
+
     myRewindCommand = new Command(tr("Rewind"), "Playback.Rewind",
-                                  Qt::CTRL + Qt::Key_Left, this);
+                                  Qt::ALT + Qt::Key_Left, this);
     connect(myRewindCommand, &QAction::triggered, this,
             &PowerTabEditor::rewindPlaybackToStart);
 
@@ -1774,9 +1929,18 @@ void PowerTabEditor::createCommands()
             SLOT(shiftBackward()));
 
     // Position-related actions.
+#ifdef Q_OS_MAC
+    // Use Command-Left instead of Control-Left, which is used for changing
+    // desktops.
+    QKeySequence move_start_seq = Qt::CTRL + Qt::Key_Left;
+    QKeySequence move_end_seq = Qt::CTRL + Qt::Key_Right;
+#else
+    QKeySequence move_start_seq = QKeySequence::MoveToStartOfLine;
+    QKeySequence move_end_seq = QKeySequence::MoveToEndOfLine;
+#endif
     myStartPositionCommand =
         new Command(tr("Move to &Start"), "Position.Staff.MoveToStart",
-                    QKeySequence::MoveToStartOfLine, this);
+                    move_start_seq, this);
     connect(myStartPositionCommand, SIGNAL(triggered()), this,
             SLOT(moveCaretToStart()));
 
@@ -1806,7 +1970,7 @@ void PowerTabEditor::createCommands()
 
     myLastPositionCommand =
         new Command(tr("Move to &End"), "Position.Staff.MoveToEnd",
-                    QKeySequence::MoveToEndOfLine, this);
+                    move_end_seq, this);
     connect(myLastPositionCommand, SIGNAL(triggered()), this,
             SLOT(moveCaretToEnd()));
 
@@ -2281,15 +2445,32 @@ void PowerTabEditor::createCommands()
     connect(myShowTuningDictionaryCommand, SIGNAL(triggered()),
             this, SLOT(showTuningDictionary()));
 
+    myEditViewFiltersCommand =
+        new Command(tr("Edit View Filters..."), "Player.EditViewFilters",
+                    QKeySequence(), this);
+    connect(myEditViewFiltersCommand, &QAction::triggered, this,
+            &PowerTabEditor::editViewFilters);
+
     // Window Menu commands.
+    
+#ifdef Q_OS_MAC
+    // NextChild is Command-{ on OS X, so use the more conventional Control-Tab
+    // to match Safari, Finder, etc.
+    QKeySequence next_tab_seq = Qt::META + Qt::Key_Tab;
+    QKeySequence prev_tab_seq = Qt::META + Qt::SHIFT + Qt::Key_Tab;
+#else
+    QKeySequence next_tab_seq = QKeySequence::NextChild;
+    QKeySequence prev_tab_seq = QKeySequence::PreviousChild;
+#endif
+    
     myNextTabCommand = new Command(tr("Next Tab"), "Window.NextTab",
-                                   Qt::CTRL + Qt::Key_Tab, this);
+                                   next_tab_seq, this);
     connect(myNextTabCommand, &QAction::triggered, [=]() {
         cycleTab(1);
     });
 
     myPrevTabCommand = new Command(tr("Previous Tab"), "Window.PreviousTab",
-                                   Qt::CTRL + Qt::SHIFT + Qt::Key_Tab, this);
+                                   prev_tab_seq, this);
     connect(myPrevTabCommand, &QAction::triggered, [=]() {
         cycleTab(-1);
     });
@@ -2307,6 +2488,30 @@ void PowerTabEditor::createCommands()
     myInstrumentDockWidgetCommand =
         createCommandWrapper(myInstrumentDockWidget->toggleViewAction(),
                              "Window.Instruments", QKeySequence(), this);
+}
+
+void PowerTabEditor::loadKeyboardShortcuts()
+{
+    auto settings = mySettingsManager->getReadHandle();
+    for (auto command : getCommands())
+        command->load(*settings);
+}
+
+void PowerTabEditor::saveKeyboardShortcuts() const
+{
+    auto settings = mySettingsManager->getWriteHandle();
+    for (auto command : getCommands())
+        command->save(*settings);
+}
+
+std::vector<const Command *> PowerTabEditor::getCommands() const
+{
+    return findChildren<const Command *>().toVector().toStdVector();
+}
+
+std::vector<Command *> PowerTabEditor::getCommands()
+{
+    return findChildren<Command *>().toVector().toStdVector();
 }
 
 void PowerTabEditor::createMixer()
@@ -2372,7 +2577,7 @@ Command *PowerTabEditor::createCommandWrapper(
     // Keep the two actions in sync with each other.
     connect(command, &QAction::triggered, action, &QAction::triggered);
     connect(action, &QAction::toggled, command, &QAction::setChecked);
-    
+
     return command;
 }
 
@@ -2430,6 +2635,7 @@ void PowerTabEditor::createMenus()
     myFileMenu->addAction(myOpenFileCommand);
     myFileMenu->addAction(myCloseTabCommand);
     myFileMenu->addSeparator();
+    myFileMenu->addAction(mySaveCommand);
     myFileMenu->addAction(mySaveAsCommand);
     myFileMenu->addSeparator();
     myFileMenu->addAction(myPrintCommand);
@@ -2451,6 +2657,9 @@ void PowerTabEditor::createMenus()
     myEditMenu->addAction(myCopyCommand);
     myEditMenu->addAction(myPasteCommand);
     myEditMenu->addSeparator();
+    myEditMenu->addAction(myRemoveNoteCommand);
+    myEditMenu->addAction(myRemovePositionCommand);
+    myEditMenu->addSeparator();
     myEditMenu->addAction(myPolishCommand);
     myEditMenu->addAction(myPolishSystemCommand);
     myEditMenu->addSeparator();
@@ -2458,6 +2667,7 @@ void PowerTabEditor::createMenus()
     // Playback Menu.
     myPlaybackMenu = menuBar()->addMenu(tr("Play&back"));
     myPlaybackMenu->addAction(myPlayPauseCommand);
+    myPlaybackMenu->addAction(myPlayFromStartOfMeasureCommand);
     myPlaybackMenu->addAction(myRewindCommand);
     myPlaybackMenu->addAction(myMetronomeCommand);
 
@@ -2631,7 +2841,9 @@ void PowerTabEditor::createMenus()
     myPlayerMenu->addAction(myAddPlayerCommand);
     myPlayerMenu->addAction(myAddInstrumentCommand);
     myPlayerMenu->addAction(myPlayerChangeCommand);
+    myPlayerMenu->addSeparator();
     myPlayerMenu->addAction(myShowTuningDictionaryCommand);
+    myPlayerMenu->addAction(myEditViewFiltersCommand);
 
     // Window Menu.
     myWindowMenu = menuBar()->addMenu(tr("&Window"));
@@ -2649,6 +2861,7 @@ void PowerTabEditor::createMenus()
 void PowerTabEditor::createTabArea()
 {
     myTabWidget = new QTabWidget(this);
+    myTabWidget->setDocumentMode(true);
     myTabWidget->setTabsClosable(true);
 
     connect(myTabWidget, SIGNAL(tabCloseRequested(int)), this,
@@ -2662,20 +2875,17 @@ void PowerTabEditor::createTabArea()
     connect(myPlaybackWidget, &PlaybackWidget::activeVoiceChanged, this,
             &PowerTabEditor::updateActiveVoice);
 
-    QSettings settings;
-    myMetronomeCommand->setChecked(
-        settings.value(Settings::MIDI_METRONOME_ENABLED,
-                       Settings::MIDI_METRONOME_ENABLED_DEFAULT).toBool());
+    connect(myPlaybackWidget, &PlaybackWidget::activeFilterChanged, this,
+            &PowerTabEditor::updateActiveFilter);
 
-    mySettingsPubSub->subscribe([=](const std::string &setting) {
-        if (setting == Settings::MIDI_METRONOME_ENABLED)
-        {
-            QSettings settings;
-            myMetronomeCommand->setChecked(
-                settings.value(Settings::MIDI_METRONOME_ENABLED,
-                Settings::MIDI_METRONOME_ENABLED_DEFAULT).toBool());
-        }
-    });
+    auto update_metronome_state = [&]() {
+        auto settings = mySettingsManager->getReadHandle();
+        myMetronomeCommand->setChecked(
+            settings->get(Settings::MetronomeEnabled));
+    };
+
+    update_metronome_state();
+    mySettingsManager->subscribeToChanges(update_metronome_state);
 
     myPlaybackArea = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(myPlaybackArea);
@@ -2692,8 +2902,10 @@ void PowerTabEditor::setPreviousDirectory(const QString &fileName)
 {
     QFileInfo fileInfo(fileName);
     myPreviousDirectory = fileInfo.absolutePath();
-    QSettings settings;
-    settings.setValue(Settings::APP_PREVIOUS_DIRECTORY, myPreviousDirectory);
+
+    auto settings = mySettingsManager->getWriteHandle();
+    settings->set(Settings::PreviousDirectory,
+                  myPreviousDirectory.toStdString());
 }
 
 void PowerTabEditor::setupNewTab()
@@ -2773,7 +2985,7 @@ void PowerTabEditor::setupNewTab()
 
     myMixer->reset(doc.getScore());
     myInstrumentPanel->reset(doc.getScore());
-    myPlaybackWidget->reset(doc.getScore());
+    myPlaybackWidget->reset(doc);
 
     // Switch to the new document.
     myTabWidget->setCurrentIndex(myDocumentManager->getCurrentDocumentIndex());
@@ -2794,14 +3006,14 @@ namespace
 inline void updatePositionProperty(Command *command, const Position *pos,
                                    Position::SimpleProperty property)
 {
-    command->setEnabled(pos);
+    command->setEnabled(pos != nullptr);
     command->setChecked(pos && pos->hasProperty(property));
 }
 
 inline void updateNoteProperty(Command *command, const Note *note,
                                Note::SimpleProperty property)
 {
-    command->setEnabled(note);
+    command->setEnabled(note != nullptr);
     command->setChecked(note && note->hasProperty(property));
 }
 }
@@ -2848,13 +3060,13 @@ void PowerTabEditor::updateCommands()
                                              Score::MIN_LINE_SPACING);
     myShiftBackwardCommand->setEnabled(!pos && (position == 0 || !barline) &&
                                        !tempoMarker && !altEnding && !dynamic);
-    myRemoveNoteCommand->setEnabled(note);
+    myRemoveNoteCommand->setEnabled(note != nullptr);
     myRemovePositionCommand->setEnabled(pos || barline || hasSelection);
 
     myChordNameCommand->setChecked(
-        ScoreUtils::findByPosition(system.getChords(), position));
+        ScoreUtils::findByPosition(system.getChords(), position) != nullptr);
     myTextCommand->setChecked(
-        ScoreUtils::findByPosition(system.getTextItems(), position));
+        ScoreUtils::findByPosition(system.getTextItems(), position) != nullptr);
 
     // Note durations
     Position::DurationType durationType = myActiveDurationType;
@@ -2927,13 +3139,15 @@ void PowerTabEditor::updateCommands()
     updateNoteProperty(myOctave15maCommand, note, Note::Octave15ma);
     updateNoteProperty(myOctave15mbCommand, note, Note::Octave15mb);
 
-    myTripletCommand->setEnabled(pos);
-    myIrregularGroupingCommand->setEnabled(pos);
+    myAddRestCommand->setEnabled(!pos || !pos->isRest());
+
+    myTripletCommand->setEnabled(pos != nullptr);
+    myIrregularGroupingCommand->setEnabled(pos != nullptr);
 
     myMultibarRestCommand->setEnabled(!barline || position == 0);
     myMultibarRestCommand->setChecked(pos && pos->hasMultiBarRest());
 
-    myRehearsalSignCommand->setEnabled(barline);
+    myRehearsalSignCommand->setEnabled(barline != nullptr);
     myRehearsalSignCommand->setChecked(barline && barline->hasRehearsalSign());
 
     const bool isAlterationOfPace =
@@ -2944,12 +3158,13 @@ void PowerTabEditor::updateCommands()
     myAlterationOfPaceCommand->setEnabled(!tempoMarker || isAlterationOfPace);
     myAlterationOfPaceCommand->setChecked(isAlterationOfPace);
 
-    myKeySignatureCommand->setEnabled(barline);
-    myTimeSignatureCommand->setEnabled(barline);
+    myKeySignatureCommand->setEnabled(barline != nullptr);
+    myTimeSignatureCommand->setEnabled(barline != nullptr);
     myStandardBarlineCommand->setEnabled(!pos && !barline);
     myDirectionCommand->setChecked(
-        ScoreUtils::findByPosition(system.getDirections(), position));
-    myRepeatEndingCommand->setChecked(altEnding);
+        ScoreUtils::findByPosition(system.getDirections(), position) !=
+        nullptr);
+    myRepeatEndingCommand->setChecked(altEnding != nullptr);
     myDynamicCommand->setChecked(dynamic != nullptr);
 
     if (barline) // Current position is bar.
@@ -2968,7 +3183,7 @@ void PowerTabEditor::updateCommands()
         myBarlineCommand->setText(tr("Barline"));
     }
 
-    myHammerPullCommand->setEnabled(note);
+    myHammerPullCommand->setEnabled(note != nullptr);
     myHammerPullCommand->setChecked(note &&
                                     note->hasProperty(Note::HammerOnOrPullOff));
 
@@ -2976,13 +3191,13 @@ void PowerTabEditor::updateCommands()
                        Note::HammerOnFromNowhere);
     updateNoteProperty(myPullOffToNowhereCommand, note, Note::PullOffToNowhere);
     updateNoteProperty(myNaturalHarmonicCommand, note, Note::NaturalHarmonic);
-    myArtificialHarmonicCommand->setEnabled(note);
+    myArtificialHarmonicCommand->setEnabled(note != nullptr);
     myArtificialHarmonicCommand->setChecked(note &&
                                             note->hasArtificialHarmonic());
-    myTappedHarmonicCommand->setEnabled(note);
+    myTappedHarmonicCommand->setEnabled(note != nullptr);
     myTappedHarmonicCommand->setChecked(note && note->hasTappedHarmonic());
 
-    myBendCommand->setEnabled(note);
+    myBendCommand->setEnabled(note != nullptr);
     myBendCommand->setChecked(note && note->hasBend());
 
     updateNoteProperty(mySlideIntoFromAboveCommand, note,
@@ -3001,7 +3216,7 @@ void PowerTabEditor::updateCommands()
     updatePositionProperty(myPalmMuteCommand, pos, Position::PalmMuting);
     updatePositionProperty(myTremoloPickingCommand, pos,
                            Position::TremoloPicking);
-    myTrillCommand->setEnabled(note);
+    myTrillCommand->setEnabled(note != nullptr);
     myTrillCommand->setChecked(note && note->hasTrill());
     updatePositionProperty(myTapCommand, pos, Position::Tap);
     updatePositionProperty(myArpeggioUpCommand, pos, Position::ArpeggioUp);
@@ -3011,7 +3226,8 @@ void PowerTabEditor::updateCommands()
                            Position::PickStrokeDown);
 
     myPlayerChangeCommand->setChecked(
-        ScoreUtils::findByPosition(system.getPlayerChanges(), position));
+        ScoreUtils::findByPosition(system.getPlayerChanges(), position) !=
+        nullptr);
 }
 
 void PowerTabEditor::enableEditing(bool enable)
@@ -3029,12 +3245,15 @@ void PowerTabEditor::enableEditing(bool enable)
     }
 
     myCloseTabCommand->setEnabled(enable);
+    mySaveCommand->setEnabled(enable);
     mySaveAsCommand->setEnabled(enable);
     myPrintCommand->setEnabled(enable);
     myPrintPreviewCommand->setEnabled(enable);
+    myPlayFromStartOfMeasureCommand->setEnabled(enable);
     myAddPlayerCommand->setEnabled(enable);
     myAddInstrumentCommand->setEnabled(enable);
     myPlayerChangeCommand->setEnabled(enable);
+    myEditViewFiltersCommand->setEnabled(enable);
     myNextTabCommand->setEnabled(enable);
     myPrevTabCommand->setEnabled(enable);
 
@@ -3083,16 +3302,20 @@ void PowerTabEditor::rewindPlaybackToStart()
 
 void PowerTabEditor::toggleMetronome()
 {
-    QSettings settings;
-    settings.setValue(Settings::MIDI_METRONOME_ENABLED,
-                      myMetronomeCommand->isChecked());
-    mySettingsPubSub->publish(Settings::MIDI_METRONOME_ENABLED);
+    auto settings = mySettingsManager->getWriteHandle();
+    settings->set(Settings::MetronomeEnabled, myMetronomeCommand->isChecked());
 }
 
 void PowerTabEditor::updateActiveVoice(int voice)
 {
     getLocation().setVoiceIndex(voice);
     updateCommands();
+}
+
+void PowerTabEditor::updateActiveFilter(int filter)
+{
+    myDocumentManager->getCurrentDocument().getViewOptions().setFilter(filter);
+    redrawScore();
 }
 
 void PowerTabEditor::updateLocationLabel()
@@ -3138,7 +3361,7 @@ void PowerTabEditor::editTimeSignature(const ScoreLocation &timeLocation)
 
 void PowerTabEditor::editBarline(const ScoreLocation &barLocation)
 {
-    ScoreLocation location(getLocation());
+	ScoreLocation location(getLocation());
     location.setSystemIndex(barLocation.getSystemIndex());
     location.setPositionIndex(barLocation.getPositionIndex());
     System &system = location.getSystem();
@@ -3261,6 +3484,9 @@ void PowerTabEditor::insertSystem(int index)
 void PowerTabEditor::insertStaff(int index)
 {
     StaffDialog dialog(this);
+
+    const Staff &current_staff = getLocation().getStaff();
+    dialog.setStringCount(current_staff.getStringCount());
 
     if (dialog.exec() == QDialog::Accepted)
     {

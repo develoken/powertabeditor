@@ -18,23 +18,23 @@
 #include "preferencesdialog.h"
 #include "ui_preferencesdialog.h"
 
-#include <app/pubsub/settingspubsub.h>
 #include <app/settings.h>
+#include <app/settingsmanager.h>
 #include <audio/midioutputdevice.h>
+#include <audio/settings.h>
 #include <boost/lexical_cast.hpp>
 #include <dialogs/tuningdialog.h>
-#include <QSettings>
 #include <score/generalmidi.h>
 
 typedef std::pair<int, int> MidiApiAndPort;
 Q_DECLARE_METATYPE(MidiApiAndPort)
 
-PreferencesDialog::PreferencesDialog(
-    QWidget *parent, std::shared_ptr<SettingsPubSub> settingsPubsub,
-    const TuningDictionary &dictionary)
+PreferencesDialog::PreferencesDialog(QWidget *parent,
+                                     SettingsManager &settings_manager,
+                                     const TuningDictionary &dictionary)
     : QDialog(parent),
       ui(new Ui::PreferencesDialog),
-      mySettingsPubsub(settingsPubsub),
+      mySettingsManager(settings_manager),
       myDictionary(dictionary)
 {
     ui->setupUi(this);
@@ -80,69 +80,55 @@ PreferencesDialog::~PreferencesDialog()
 
 void PreferencesDialog::loadCurrentSettings()
 {
-    QSettings settings;
+    auto settings = mySettingsManager.getReadHandle();
 
-    const int api = settings.value(Settings::MIDI_PREFERRED_API,
-                              Settings::MIDI_PREFERRED_API_DEFAULT).toInt();
-    const int port = settings.value(Settings::MIDI_PREFERRED_PORT,
-                              Settings::MIDI_PREFERRED_PORT_DEFAULT).toInt();
+    const unsigned int api = settings->get(Settings::MidiApi);
+    const unsigned int port = settings->get(Settings::MidiPort);
 
     // Find the preferred midi port in the combo box.
     MidiOutputDevice device;
-    ui->midiPortComboBox->setCurrentIndex(ui->midiPortComboBox->findText(
-                QString::fromStdString(device.getPortName(api, port))));
+    if (api < device.getApiCount() && port < device.getPortCount(api))
+    {
+        ui->midiPortComboBox->setCurrentIndex(ui->midiPortComboBox->findText(
+            QString::fromStdString(device.getPortName(api, port))));
+    }
 
     ui->vibratoStrengthSpinBox->setValue(
-        settings.value(Settings::MIDI_VIBRATO_LEVEL,
-                       Settings::MIDI_VIBRATO_LEVEL_DEFAULT).toUInt());
+        settings->get(Settings::MidiVibratoLevel));
 
     ui->wideVibratoStrengthSpinBox->setValue(
-        settings.value(Settings::MIDI_WIDE_VIBRATO_LEVEL,
-                       Settings::MIDI_WIDE_VIBRATO_LEVEL_DEFAULT).toUInt());
+        settings->get(Settings::MidiWideVibratoLevel));
 
     ui->metronomeEnabledCheckBox->setChecked(
-        settings.value(Settings::MIDI_METRONOME_ENABLED,
-                       Settings::MIDI_METRONOME_ENABLED_DEFAULT).toBool());
+        settings->get(Settings::MetronomeEnabled));
 
     ui->metronomePresetComboBox->setCurrentIndex(
-        settings.value(Settings::MIDI_METRONOME_PRESET,
-                       Settings::MIDI_METRONOME_PRESET_DEFAULT).toInt());
+        settings->get(Settings::MetronomePreset));
 
     ui->strongAccentVolumeSpinBox->setValue(
-        settings.value(Settings::MIDI_METRONOME_STRONG_ACCENT,
-                       Settings::MIDI_METRONOME_STRONG_ACCENT_DEFAULT).toInt());
+        settings->get(Settings::MetronomeStrongAccent));
 
     ui->weakAccentVolumeSpinBox->setValue(
-        settings.value(Settings::MIDI_METRONOME_WEAK_ACCENT,
-                       Settings::MIDI_METRONOME_WEAK_ACCENT_DEFAULT).toInt());
+        settings->get(Settings::MetronomeWeakAccent));
 
     ui->countInEnabledCheckBox->setChecked(
-        settings.value(Settings::MIDI_METRONOME_ENABLE_COUNTIN,
-                       Settings::MIDI_METRONOME_ENABLE_COUNTIN_DEFAULT).toBool());
+        settings->get(Settings::CountInEnabled));
 
     ui->countInPresetComboBox->setCurrentIndex(
-        settings.value(Settings::MIDI_METRONOME_COUNTIN_PRESET,
-                       Settings::MIDI_METRONOME_COUNTIN_PRESET_DEFAULT).toInt());
+        settings->get(Settings::CountInPreset));
 
-    ui->countInVolumeSpinBox->setValue(
-        settings.value(Settings::MIDI_METRONOME_COUNTIN_VOLUME,
-                       Settings::MIDI_METRONOME_COUNTIN_VOLUME_DEFAULT).toInt());
+    ui->countInVolumeSpinBox->setValue(settings->get(Settings::CountInVolume));
 
     ui->openInNewWindowCheckBox->setChecked(
-        settings.value(Settings::GENERAL_OPEN_IN_NEW_WINDOW,
-                       Settings::GENERAL_OPEN_IN_NEW_WINDOW_DEFAULT).toBool());
+        settings->get(Settings::OpenFilesInNewWindow));
 
     ui->defaultInstrumentNameLineEdit->setText(
-        settings.value(Settings::DEFAULT_INSTRUMENT_NAME,
-                       Settings::DEFAULT_INSTRUMENT_NAME_DEFAULT).toString());
+        QString::fromStdString(settings->get(Settings::DefaultInstrumentName)));
     ui->defaultPresetComboBox->setCurrentIndex(
-        settings.value(Settings::DEFAULT_INSTRUMENT_PRESET,
-                       Settings::DEFAULT_INSTRUMENT_PRESET_DEFAULT).toInt());
+        settings->get(Settings::DefaultInstrumentPreset));
 
     ui->defaultTuningClickButton->setToolTip(tr("Click to adjust tuning."));
-    myDefaultTuning = settings.value(
-            Settings::DEFAULT_INSTRUMENT_TUNING,
-            QVariant::fromValue(Settings::DEFAULT_INSTRUMENT_TUNING_DEFAULT)).value<Tuning>();
+    myDefaultTuning = settings->get(Settings::DefaultTuning);
     ui->defaultTuningClickButton->setText(QString::fromStdString(
             boost::lexical_cast<std::string>(myDefaultTuning)));
     connect(ui->defaultTuningClickButton, SIGNAL(clicked()), this, SLOT(editTuning()));
@@ -151,55 +137,49 @@ void PreferencesDialog::loadCurrentSettings()
 /// Save the new settings
 void PreferencesDialog::accept()
 {
-    QSettings settings;
+    auto settings = mySettingsManager.getWriteHandle();
 
     MidiApiAndPort apiAndPort = ui->midiPortComboBox->itemData(
                 ui->midiPortComboBox->currentIndex()).value<MidiApiAndPort>();
-    settings.setValue(Settings::MIDI_PREFERRED_API, apiAndPort.first);
-    settings.setValue(Settings::MIDI_PREFERRED_PORT, apiAndPort.second);
+    settings->set(Settings::MidiApi, apiAndPort.first);
+    settings->set(Settings::MidiPort, apiAndPort.second);
 
-    settings.setValue(Settings::MIDI_VIBRATO_LEVEL,
-                      ui->vibratoStrengthSpinBox->value());
+    settings->set(Settings::MidiVibratoLevel,
+                  ui->vibratoStrengthSpinBox->value());
 
-    settings.setValue(Settings::MIDI_WIDE_VIBRATO_LEVEL,
-                      ui->wideVibratoStrengthSpinBox->value());
+    settings->set(Settings::MidiWideVibratoLevel,
+                  ui->wideVibratoStrengthSpinBox->value());
 
-    settings.setValue(Settings::MIDI_METRONOME_ENABLED,
-                      ui->metronomeEnabledCheckBox->isChecked());
+    settings->set(Settings::MetronomeEnabled,
+                  ui->metronomeEnabledCheckBox->isChecked());
 
-    settings.setValue(Settings::MIDI_METRONOME_PRESET,
-                      ui->metronomePresetComboBox->currentIndex());
+    settings->set(Settings::MetronomePreset,
+                  ui->metronomePresetComboBox->currentIndex());
 
-    settings.setValue(Settings::MIDI_METRONOME_STRONG_ACCENT,
-                      ui->strongAccentVolumeSpinBox->value());
+    settings->set(Settings::MetronomeStrongAccent,
+                  ui->strongAccentVolumeSpinBox->value());
 
-    settings.setValue(Settings::MIDI_METRONOME_WEAK_ACCENT,
-                      ui->weakAccentVolumeSpinBox->value());
+    settings->set(Settings::MetronomeWeakAccent,
+                  ui->weakAccentVolumeSpinBox->value());
 
-    settings.setValue(Settings::MIDI_METRONOME_ENABLE_COUNTIN,
-                      ui->countInEnabledCheckBox->isChecked());
+    settings->set(Settings::CountInEnabled,
+                  ui->countInEnabledCheckBox->isChecked());
 
-    settings.setValue(Settings::MIDI_METRONOME_COUNTIN_PRESET,
-                      ui->countInPresetComboBox->currentIndex());
+    settings->set(Settings::CountInPreset,
+                  ui->countInPresetComboBox->currentIndex());
 
-    settings.setValue(Settings::MIDI_METRONOME_COUNTIN_VOLUME,
-                      ui->countInVolumeSpinBox->value());
+    settings->set(Settings::CountInVolume, ui->countInVolumeSpinBox->value());
 
-    settings.setValue(Settings::GENERAL_OPEN_IN_NEW_WINDOW,
-                      ui->openInNewWindowCheckBox->isChecked());
+    settings->set(Settings::OpenFilesInNewWindow,
+                  ui->openInNewWindowCheckBox->isChecked());
 
-    settings.setValue(Settings::DEFAULT_INSTRUMENT_NAME,
-                      ui->defaultInstrumentNameLineEdit->text());
+    settings->set(Settings::DefaultInstrumentName,
+                  ui->defaultInstrumentNameLineEdit->text().toStdString());
 
-    settings.setValue(Settings::DEFAULT_INSTRUMENT_PRESET,
-                      ui->defaultPresetComboBox->currentIndex());
+    settings->set(Settings::DefaultInstrumentPreset,
+                  ui->defaultPresetComboBox->currentIndex());
 
-    settings.setValue(Settings::DEFAULT_INSTRUMENT_TUNING,
-                      QVariant::fromValue(myDefaultTuning));
-
-    settings.sync();
-
-    mySettingsPubsub->publish(Settings::MIDI_METRONOME_ENABLED);
+    settings->set(Settings::DefaultTuning, myDefaultTuning);
 
     done(Accepted);
 }

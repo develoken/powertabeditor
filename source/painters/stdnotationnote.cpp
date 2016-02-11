@@ -94,8 +94,10 @@ void StdNotationNote::getNotesInStaff(
     tuningNotes.push_back(Midi::MIDI_NOTE_E1);
     fallbackTuning.setNotes(tuningNotes);
 
-    QFont musicFont(MusicFont().getFont());
-    QFontMetricsF fm(musicFont);
+    QFont default_font(MusicFont::getFont(MusicFont::DEFAULT_FONT_SIZE));
+    QFont grace_font(MusicFont::getFont(MusicFont::GRACE_NOTE_SIZE));
+    QFontMetricsF default_fm(default_font);
+    QFontMetricsF grace_fm(grace_font);
 
     int voiceIndex = 0;
     for (const Voice &voice : staff.getVoices())
@@ -192,7 +194,9 @@ void StdNotationNote::getNotesInStaff(
                         accidentals[y] = accidental;
                     }
 
-                    noteHeadWidth = fm.width(stdNote.getNoteHeadSymbol());
+                    const QFontMetricsF *fm =
+                        stdNote.isGraceNote() ? &grace_fm : &default_fm;
+                    noteHeadWidth = fm->width(stdNote.getNoteHeadSymbol());
                 }
 
                 const double x = layout.getPositionX(pos.getPosition()) +
@@ -351,63 +355,66 @@ void StdNotationNote::computeBeamingGroups(
     // Rests and notes greater than eighth notes will break apart a beam group,
     // so we need to find all of the subgroups of consecutive positions that
     // can be beamed, and then create beaming groups with those notes.
-    auto beamableGroupStart = stems.begin() + firstStemIndex;
-    auto beamableGroupEnd = beamableGroupStart;
-    auto lastStem = stems.begin() + lastStemIndex;
-
-    // Find all subgroups of beamable notes (i.e. consecutive notes that aren't
-    // quarter notes, rests, etc).
-    while (beamableGroupEnd != lastStem)
+    size_t i = firstStemIndex;
+    while (i != lastStemIndex)
     {
         // Find the next range of consecutive stems that are beamable.
-        beamableGroupStart = std::find_if(beamableGroupEnd, lastStem,
-                                          &NoteStem::isBeamable);
-
-        // If there were any notes that aren't beamed but need stems (like a
-        // half note or a quarter note), create a single-item beam group for
-        // each.
-        for (auto it = beamableGroupEnd; it != beamableGroupStart; ++it)
+        while (i < lastStemIndex && !NoteStem::isBeamable(stems[i]))
         {
-            if (NoteStem::needsStem(*it))
+            // If there were any notes that aren't beamed but need stems (like a
+            // half note or a quarter note), create a single-item beam group for
+            // each.
+            if (NoteStem::needsStem(stems[i]))
             {
-                auto direction = NoteStem::formatGroup(it, it + 1);
-                groups.push_back(BeamGroup(direction, it - stems.begin(),
-                                           it + 1 - stems.begin()));
+                groups.push_back(
+                    BeamGroup(NoteStem::formatGroup(stems, { i }), { i }));
             }
+
+            ++i;
         }
 
         // Find the end of the beam group.
-        beamableGroupEnd = std::find_if(beamableGroupStart, lastStem,
-                                        std::not1(std::ptr_fun(&NoteStem::isBeamable)));
-
-        if (beamableGroupStart != beamableGroupEnd)
+        std::vector<size_t> group_stems;
+        while (i < lastStemIndex && NoteStem::isBeamable(stems[i]))
         {
-            // Set up divisions within the beam group at each beat. For example,
-            // with a group of 8 16th notes in 4/4 time, the 5th note should not
-            // be fully beamed to the previous note.
-            for (auto it = boost::next(beamableGroupStart);
-                 it != beamableGroupEnd; ++it)
+            // Grace notes don't become part of the beam group, but also don't
+            // split apart the group like a rest.
+            if (stems[i].isGraceNote())
             {
-                if (subgroupLength)
+                groups.push_back(
+                    BeamGroup(NoteStem::formatGroup(stems, { i }), { i }));
+            }
+            else
+            {
+                // Set up divisions within the beam group at each beat. For
+                // example, with a group of 8 16th notes in 4/4 time, the 5th
+                // note should not be fully beamed to the previous note.
+                if (!group_stems.empty())
                 {
-                    const int i = std::distance(
-                        stems.begin() + firstStemIndexInBar, boost::prior(it));
-
-                    if (std::abs(std::fmod(durations[i], *subgroupLength)) >=
-                        0.001)
+                    if (subgroupLength)
                     {
-                        it->setFullBeaming(true);
+                        if (std::abs(std::fmod(
+                                durations[i - firstStemIndexInBar - 1],
+                                *subgroupLength)) >= 0.001)
+                        {
+                            stems[i].setFullBeaming(true);
+                        }
                     }
+                    else
+                        stems[i].setFullBeaming(true);
                 }
-                else
-                    it->setFullBeaming(true);
+
+                group_stems.push_back(i);
             }
 
-            auto direction = NoteStem::formatGroup(beamableGroupStart,
-                                                   beamableGroupEnd);
-            groups.push_back(BeamGroup(direction,
-                                       beamableGroupStart - stems.begin(),
-                                       beamableGroupEnd - stems.begin()));
+            ++i;
+        }
+
+        // Record the beam group.
+        if (!group_stems.empty())
+        {
+            auto direction = NoteStem::formatGroup(stems, group_stems);
+            groups.push_back(BeamGroup(direction, group_stems));
         }
     }
 }
@@ -415,6 +422,11 @@ void StdNotationNote::computeBeamingGroups(
 QChar StdNotationNote::getNoteHeadSymbol() const
 {
     return myNoteHeadSymbol;
+}
+
+bool StdNotationNote::isGraceNote() const
+{
+    return myPosition->hasProperty(Position::Acciaccatura);
 }
 
 int StdNotationNote::getPosition() const

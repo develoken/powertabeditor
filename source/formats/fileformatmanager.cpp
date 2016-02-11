@@ -19,31 +19,38 @@
 
 #include <formats/gpx/gpximporter.h>
 #include <formats/guitar_pro/guitarproimporter.h>
+#include <formats/midi/midiexporter.h>
 #include <formats/powertab/powertabimporter.h>
 #include <formats/powertab/powertabexporter.h>
 #include <formats/powertab_old/powertaboldimporter.h>
-#include <QMessageBox>
 
-FileFormatManager::FileFormatManager()
+FileFormatManager::FileFormatManager(const SettingsManager &settings_manager)
 {
-    registerImporter<PowerTabImporter>();
-    registerImporter<PowerTabOldImporter>();
-    registerExporter<PowerTabExporter>();
-    registerImporter<GpxImporter>();
-    registerImporter<GuitarProImporter>();
+    myImporters.emplace_back(new PowerTabImporter());
+    myImporters.emplace_back(new PowerTabOldImporter());
+    myImporters.emplace_back(new GuitarProImporter());
+    myImporters.emplace_back(new GpxImporter());
+
+    myExporters.emplace_back(new PowerTabExporter());
+    myExporters.emplace_back(new MidiExporter(settings_manager));
 }
 
 boost::optional<FileFormat> FileFormatManager::findFormat(
         const std::string &extension) const
 {
-    for (auto importer = myImporters.begin(); importer != myImporters.end();
-         ++importer)
+    for (auto &importer : myImporters)
     {
-        if (importer->first.contains(extension))
-            return importer->first;
+        if (importer->fileFormat().contains(extension))
+            return importer->fileFormat();
     }
 
-    return nullptr;
+    for (auto &exporter : myExporters)
+    {
+        if (exporter->fileFormat().contains(extension))
+            return exporter->fileFormat();
+    }
+
+    return boost::none;
 }
 
 std::string FileFormatManager::importFileFilter() const
@@ -51,14 +58,14 @@ std::string FileFormatManager::importFileFilter() const
     std::string filterAll = "All Supported Formats (";
     std::string filterOther;
 
-    for (auto importer = myImporters.begin(); importer != myImporters.end();
-         ++importer)
+    for (auto it = myImporters.begin(); it != myImporters.end(); ++it)
     {
-        if (importer != myImporters.begin())
+        if (it != myImporters.begin())
             filterAll += " ";
 
-        filterAll += importer->first.allExtensions();
-        filterOther += ";;" + importer->first.fileFilter();
+        const FileFormat &format = (*it)->fileFormat();
+        filterAll += format.allExtensions();
+        filterOther += ";;" + format.fileFilter();
     }
 
     filterAll += ")";
@@ -66,61 +73,48 @@ std::string FileFormatManager::importFileFilter() const
     return filterAll + filterOther;
 }
 
-bool FileFormatManager::importFile(Score &score, const std::string &filename,
-                                   const FileFormat &format, QWidget *parentWindow)
+void FileFormatManager::importFile(Score &score, const std::string &filename,
+                                   const FileFormat &format)
 {
-    if (myImporters.find(format) != myImporters.end())
+    for (auto &importer : myImporters)
     {
-        try
+        if (importer->fileFormat() == format)
         {
-            myImporters.at(format)->load(filename, score);
-            return true;
-        }
-        catch (const std::exception &e)
-        {
-            QMessageBox msgBox(parentWindow);
-            msgBox.setText(QObject::tr("Error importing file - ") + QString(e.what()));
-            msgBox.exec();
-            return false;
+            importer->load(filename, score);
+            return;
         }
     }
 
-    return false;
+    throw std::runtime_error("Unknown file format");
 }
 
 std::string FileFormatManager::exportFileFilter() const
 {
     std::string filter;
 
-    for (auto exporter = myExporters.begin(); exporter != myExporters.end();
-         ++exporter)
+    for (auto it = myExporters.begin(); it != myExporters.end(); ++it)
     {
-        if (exporter != myExporters.begin())
+        if (it != myExporters.begin())
             filter += ";;";
 
-        filter += exporter->first.fileFilter();
+        filter += (*it)->fileFormat().fileFilter();
     }
 
     return filter;
 }
 
-bool FileFormatManager::exportFile(const Score &score, const std::string &filename,
+void FileFormatManager::exportFile(const Score &score,
+                                   const std::string &filename,
                                    const FileFormat &format)
 {
-    if (myExporters.find(format) != myExporters.end())
+    for (auto &exporter : myExporters)
     {
-        try
+        if (exporter->fileFormat() == format)
         {
-            myExporters.at(format)->save(filename, score);
-            return true;
-        }
-        catch (const std::exception &e)
-        {
-            QMessageBox msgBox;
-            msgBox.setText(QObject::tr("Error saving file - ") + QString(e.what()));
-            msgBox.exec();
+            exporter->save(filename, score);
+            return;
         }
     }
 
-    return false;
+    throw std::runtime_error("Unknown file format");
 }

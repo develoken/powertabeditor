@@ -25,16 +25,19 @@
 #include <score/staff.h>
 
 class QGraphicsItem;
+class QGraphicsItemGroup;
 class QGraphicsRectItem;
 class Score;
 class ScoreArea;
 class ScoreLocation;
 class System;
+class ViewOptions;
 
 class SystemRenderer
 {
 public:
-    SystemRenderer(const ScoreArea *myScoreArea, const Score &myScore);
+    SystemRenderer(const ScoreArea *score_area, const Score &score,
+                   const ViewOptions &view_options);
 
     QGraphicsItem *operator()(const System &system, int systemIndex);
 
@@ -187,11 +190,11 @@ private:
 
     const ScoreArea *myScoreArea;
     const Score &myScore;
+    const ViewOptions &myViewOptions;
 
     QGraphicsRectItem *myParentSystem;
     QGraphicsItem *myParentStaff;
 
-    MusicFont myMusicFont;
     QFont myMusicNotationFont;
     QFontMetricsF myMusicFontMetrics;
     QFont myPlainTextFont;

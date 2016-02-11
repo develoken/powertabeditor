@@ -15,69 +15,46 @@
   * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <QMetaType>
-#include <score/tuning.h>
-
 #ifndef APP_SETTINGS_H
 #define APP_SETTINGS_H
 
-/// Contains constants for keys used with the QSettings class,
-/// as well as default values for those settings where appropriate
+#include <QByteArray>
+#include <QKeySequence>
+#include <score/tuning.h>
+#include <util/settingstree.h>
+
+/// All predefined settings and their default values.
 namespace Settings
 {
-    extern const char *APP_PREVIOUS_DIRECTORY;
-    extern const char *APP_RECENT_FILES;
-    extern const char *APP_WINDOW_STATE;
+    extern const Setting<std::string> PreviousDirectory;
+    extern const Setting<QByteArray> WindowState;
+    extern const Setting<std::vector<std::string>> RecentFiles;
+    extern const Setting<bool> OpenFilesInNewWindow;
 
-    extern const char *MIDI_PREFERRED_API;
-    extern const int MIDI_PREFERRED_API_DEFAULT;
-
-    extern const char *MIDI_PREFERRED_PORT;
-    extern const int MIDI_PREFERRED_PORT_DEFAULT;
-
-    extern const char *MIDI_VIBRATO_LEVEL;
-    extern const int MIDI_VIBRATO_LEVEL_DEFAULT;
-
-    extern const char *MIDI_WIDE_VIBRATO_LEVEL;
-    extern const int MIDI_WIDE_VIBRATO_LEVEL_DEFAULT;
-
-    extern const char *MIDI_METRONOME_ENABLED;
-    extern const bool MIDI_METRONOME_ENABLED_DEFAULT;
-
-    extern const char *MIDI_METRONOME_PRESET;
-    extern const int MIDI_METRONOME_PRESET_DEFAULT;
-
-    extern const char *MIDI_METRONOME_STRONG_ACCENT;
-    extern const int MIDI_METRONOME_STRONG_ACCENT_DEFAULT;
-
-    extern const char *MIDI_METRONOME_WEAK_ACCENT;
-    extern const int MIDI_METRONOME_WEAK_ACCENT_DEFAULT;
-
-    extern const char *MIDI_METRONOME_ENABLE_COUNTIN;
-    extern const bool MIDI_METRONOME_ENABLE_COUNTIN_DEFAULT;
-
-    extern const char *MIDI_METRONOME_COUNTIN_PRESET;
-    extern const int MIDI_METRONOME_COUNTIN_PRESET_DEFAULT;
-
-    extern const char *MIDI_METRONOME_COUNTIN_VOLUME;
-    extern const int MIDI_METRONOME_COUNTIN_VOLUME_DEFAULT;
-
-    extern const char *GENERAL_OPEN_IN_NEW_WINDOW;
-    extern const bool GENERAL_OPEN_IN_NEW_WINDOW_DEFAULT;
-
-    extern const char *DEFAULT_INSTRUMENT_NAME;
-    extern const char *DEFAULT_INSTRUMENT_NAME_DEFAULT;
-
-    extern const char *DEFAULT_INSTRUMENT_PRESET;
-    extern const int DEFAULT_INSTRUMENT_PRESET_DEFAULT;
-
-    extern const char *DEFAULT_INSTRUMENT_TUNING;
-    extern const Tuning DEFAULT_INSTRUMENT_TUNING_DEFAULT;
+    extern const Setting<std::string> DefaultInstrumentName;
+    extern const Setting<int> DefaultInstrumentPreset;
+    extern const Setting<Tuning> DefaultTuning;
 }
 
-Q_DECLARE_METATYPE(Tuning);
+template <>
+struct SettingValueConverter<Tuning>
+{
+    static Tuning from(const SettingsTree::SettingValue &v);
+    static SettingsTree::SettingValue to(const Tuning &t);
+};
 
-QDataStream &operator<<(QDataStream &out, const Tuning &tuning);
-QDataStream &operator>>(QDataStream &in, Tuning &tuning);
+template <>
+struct SettingValueConverter<QByteArray>
+{
+    static QByteArray from(const SettingsTree::SettingValue &v);
+    static SettingsTree::SettingValue to(const QByteArray &array);
+};
+
+template <>
+struct SettingValueConverter<QKeySequence>
+{
+    static QKeySequence from(const SettingsTree::SettingValue &v);
+    static SettingsTree::SettingValue to(const QKeySequence &seq);
+};
 
 #endif

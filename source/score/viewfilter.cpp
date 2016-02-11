@@ -62,16 +62,20 @@ bool FilterRule::accept(const Score &score, int system_index,
         player_changes.push_back(&change);
     }
 
+    bool has_active_players = false;
     for (const PlayerChange *change : player_changes)
     {
         for (const ActivePlayer &player : change->getActivePlayers(staff_index))
         {
+            has_active_players = true;
+
             if (accept(score, player))
                 return true;
         }
     }
 
-    return false;
+    // The filter should always accept empty staves.
+    return !has_active_players;
 }
 
 bool FilterRule::accept(const Score &score, const ActivePlayer &p) const
@@ -128,6 +132,22 @@ void ViewFilter::setDescription(const std::string &description)
 void ViewFilter::addRule(const FilterRule &rule)
 {
     myRules.push_back(rule);
+}
+
+void ViewFilter::removeRule(int index)
+{
+    myRules.erase(myRules.begin() + index);
+}
+
+boost::iterator_range<ViewFilter::RuleIterator> ViewFilter::getRules()
+{
+    return boost::make_iterator_range(myRules);
+}
+
+boost::iterator_range<ViewFilter::RuleConstIterator>
+ViewFilter::getRules() const
+{
+    return boost::make_iterator_range(myRules);
 }
 
 bool ViewFilter::accept(const Score &score, int system_index,

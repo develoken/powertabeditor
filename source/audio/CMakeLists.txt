@@ -1,34 +1,28 @@
-cmake_minimum_required(VERSION 2.8.9)
+project( pteaudio )
 
-include_directories(${PROJECT_SOURCE_DIR}/external/rtmidi)
-
-add_library(pteaudio
-    bendevent.cpp
-    letringevent.cpp
-    metronomeevent.cpp
-    midievent.cpp
+set( srcs
     midioutputdevice.cpp
     midiplayer.cpp
-    playnoteevent.cpp
-    repeatcontroller.cpp
-    restevent.cpp
-    stopnoteevent.cpp
-    vibratoevent.cpp
-    volumechangeevent.cpp
-
-    bendevent.h
-    letringevent.h
-    metronomeevent.h
-    midievent.h
-    midioutputdevice.h
-    midiplayer.h
-    playnoteevent.h
-    repeatcontroller.h
-    restevent.h
-    stopnoteevent.h
-    vibratoevent.h
-    volumechangeevent.h
+    settings.cpp
 )
 
-qt5_use_modules(pteaudio Widgets) 
-cotire(pteaudio)
+set( headers
+    midioutputdevice.h
+    midiplayer.h
+    settings.h
+)
+
+set( moc_headers
+    midiplayer.h
+)
+
+pte_library(
+    NAME pteaudio
+    SOURCES ${srcs}
+    HEADERS ${headers}
+    MOC_HEADERS ${moc_headers}
+    DEPENDS
+        ptescore
+        Qt5::Core
+        rtmidi
+)

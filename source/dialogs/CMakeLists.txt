@@ -1,39 +1,6 @@
-cmake_minimum_required(VERSION 2.8.9)
+project( ptedialogs )
 
-set(FORMS
-    alterationofpacedialog.ui
-    artificialharmonicdialog.ui
-    barlinedialog.ui
-    benddialog.ui
-    chordnamedialog.ui
-    crashdialog.ui
-    directiondialog.ui
-    dynamicdialog.ui
-    fileinformationdialog.ui
-    gotobarlinedialog.ui
-    gotorehearsalsigndialog.ui
-    irregulargroupingdialog.ui
-    keyboardsettingsdialog.ui
-    keysignaturedialog.ui
-    multibarrestdialog.ui
-    playerchangedialog.ui
-    preferencesdialog.ui
-    rehearsalsigndialog.ui
-    staffdialog.ui
-    tappedharmonicdialog.ui
-    tempomarkerdialog.ui
-    textitemdialog.ui
-    timesignaturedialog.ui
-    trilldialog.ui
-    tuningdialog.ui
-    tuningdictionarydialog.ui
-    #volumeswelldialog.ui
-)
-
-qt5_wrap_ui(FORMS_HEADERS ${FORMS})
-
-add_library(ptedialogs
-    ${FORMS_HEADERS}
+set( srcs
     alterationofpacedialog.cpp
     alternateendingdialog.cpp
     artificialharmonicdialog.cpp
@@ -44,6 +11,7 @@ add_library(ptedialogs
     directiondialog.cpp
     dynamicdialog.cpp
     fileinformationdialog.cpp
+    filterrulewidget.cpp
     gotobarlinedialog.cpp
     gotorehearsalsigndialog.cpp
     irregulargroupingdialog.cpp
@@ -61,8 +29,11 @@ add_library(ptedialogs
     trilldialog.cpp
     tuningdialog.cpp
     tuningdictionarydialog.cpp
-    #volumeswelldialog.cpp
+    viewfilterdialog.cpp
+    viewfilterpresenter.cpp
+)
 
+set( headers
     alterationofpacedialog.h
     alternateendingdialog.h
     artificialharmonicdialog.h
@@ -73,6 +44,7 @@ add_library(ptedialogs
     directiondialog.h
     dynamicdialog.h
     fileinformationdialog.h
+    filterrulewidget.h
     gotobarlinedialog.h
     gotorehearsalsigndialog.h
     irregulargroupingdialog.h
@@ -90,8 +62,76 @@ add_library(ptedialogs
     trilldialog.h
     tuningdialog.h
     tuningdictionarydialog.h
-    #volumeswelldialog.h
+    viewfilterdialog.h
+    viewfilterpresenter.h
 )
 
-qt5_use_modules(ptedialogs Widgets) 
-cotire(ptedialogs)
+set( moc_headers
+    alterationofpacedialog.h
+    alternateendingdialog.h
+    artificialharmonicdialog.h
+    barlinedialog.h
+    benddialog.h
+    chordnamedialog.h
+    crashdialog.h
+    directiondialog.h
+    fileinformationdialog.h
+    filterrulewidget.h
+    gotorehearsalsigndialog.h
+    keyboardsettingsdialog.h
+    keysignaturedialog.h
+    multibarrestdialog.h
+    playerchangedialog.h
+    preferencesdialog.h
+    rehearsalsigndialog.h
+    tappedharmonicdialog.h
+    tempomarkerdialog.h
+    textitemdialog.h
+    timesignaturedialog.h
+    trilldialog.h
+    tuningdialog.h
+    tuningdictionarydialog.h
+    viewfilterdialog.h
+)
+
+set( forms
+    alterationofpacedialog.ui
+    artificialharmonicdialog.ui
+    barlinedialog.ui
+    benddialog.ui
+    chordnamedialog.ui
+    crashdialog.ui
+    directiondialog.ui
+    dynamicdialog.ui
+    fileinformationdialog.ui
+    filterrulewidget.ui
+    gotobarlinedialog.ui
+    gotorehearsalsigndialog.ui
+    irregulargroupingdialog.ui
+    keyboardsettingsdialog.ui
+    keysignaturedialog.ui
+    multibarrestdialog.ui
+    playerchangedialog.ui
+    preferencesdialog.ui
+    rehearsalsigndialog.ui
+    staffdialog.ui
+    tappedharmonicdialog.ui
+    tempomarkerdialog.ui
+    textitemdialog.ui
+    timesignaturedialog.ui
+    trilldialog.ui
+    tuningdialog.ui
+    tuningdictionarydialog.ui
+    viewfilterdialog.ui
+)
+
+pte_library(
+    NAME ptedialogs
+    SOURCES ${srcs}
+    HEADERS ${headers}
+    MOC_HEADERS ${moc_headers}
+    FORMS ${forms}
+    DEPENDS
+        ptescore
+        Qt5::Widgets
+)

@@ -213,7 +213,7 @@ void ScoreUtils::adjustRehearsalSigns(Score &score)
 void ScoreUtils::addStandardFilters(Score &score)
 {
     ViewFilter filter_all;
-    filter_all.setDescription("All");
+    filter_all.setDescription("All Instruments");
     score.insertViewFilter(filter_all);
 
     ViewFilter filter_guitars;
@@ -224,7 +224,7 @@ void ScoreUtils::addStandardFilters(Score &score)
 
     ViewFilter filter_basses;
     filter_basses.setDescription("Basses");
-    filter_guitars.addRule(
+    filter_basses.addRule(
         FilterRule(FilterRule::NUM_STRINGS, FilterRule::LESS_THAN_EQUAL, 5));
     score.insertViewFilter(filter_basses);
 }

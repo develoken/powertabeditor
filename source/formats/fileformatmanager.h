@@ -19,20 +19,20 @@
 #define FORMATS_FILEFORMATMANAGER_H
 
 #include <boost/optional/optional.hpp>
-#include <map>
 #include <memory>
+#include <vector>
 #include "fileformat.h"
 
 class FileFormatImporter;
 class FileFormatExporter;
-class QWidget;
 class Score;
+class SettingsManager;
 
 /// An interface for import/export of various file formats.
 class FileFormatManager
 {
 public:
-    FileFormatManager();
+    FileFormatManager(const SettingsManager &settings_manager);
 
     /// Returns the file format corresponding to the given extension.
     boost::optional<FileFormat> findFormat(const std::string &extension) const;
@@ -42,14 +42,16 @@ public:
     std::string importFileFilter() const;
 
     /// Imports a file into the given score.
-    bool importFile(Score &score, const std::string &filename,
-                    const FileFormat &format, QWidget *parentWindow);
+    /// @throws std::exception
+    void importFile(Score &score, const std::string &filename,
+                    const FileFormat &format);
 
     /// Returns a correctly formatted file filter for a Qt file dialog.
     std::string exportFileFilter() const;
 
     /// Exports the given score to a file.
-    bool exportFile(const Score &score, const std::string &filename,
+    /// @throws std::exception
+    void exportFile(const Score &score, const std::string &filename,
                     const FileFormat &format);
 
 private:
@@ -59,22 +61,8 @@ private:
     template <typename Exporter>
     void registerExporter();
 
-    std::map<FileFormat, std::unique_ptr<FileFormatImporter>> myImporters;
-    std::map<FileFormat, std::unique_ptr<FileFormatExporter>> myExporters;
+    std::vector<std::unique_ptr<FileFormatImporter>> myImporters;
+    std::vector<std::unique_ptr<FileFormatExporter>> myExporters;
 };
-
-template <typename Importer>
-void FileFormatManager::registerImporter()
-{
-    FileFormat format = Importer().fileFormat();
-    myImporters[format].reset(new Importer());
-}
-
-template <typename Exporter>
-void FileFormatManager::registerExporter()
-{
-    FileFormat format = Exporter().fileFormat();
-    myExporters[format].reset(new Exporter());
-}
 
 #endif

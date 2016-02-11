@@ -17,77 +17,56 @@
 
 #include "tuningdictionary.h"
 
-#include <fstream>
-#include <QCoreApplication>
-#include <QDebug>
-#include <QDir>
-#include <QMutexLocker>
-#include <QStandardPaths>
-#include <QtConcurrentRun>
+#include <app/appinfo.h>
+#include <app/paths.h>
+#include <boost/filesystem/fstream.hpp>
+#include <boost/filesystem/operations.hpp>
 #include <score/serialization.h>
 #include <stdexcept>
 
-void TuningDictionary::load()
+static const char *theTuningDictFilename = "tunings.json";
+
+std::vector<Tuning> TuningDictionary::load()
 {
-    try
+    for (boost::filesystem::path dir : Paths::getDataDirs())
     {
-        QStringList paths = availablePaths();
-        for (const QString &path : paths)
-        {
-            if (!QFile(path).exists())
-                continue;
+        auto path = dir / theTuningDictFilename;
+        if (!boost::filesystem::exists(path))
+            continue;
 
-            std::ifstream file(path.toLocal8Bit().constData());
+        boost::filesystem::ifstream file(path);
 
-            QMutexLocker lock(&myMutex);
-            ScoreUtils::load(file, "tunings", myTunings);
-            break;
-        }
+        std::vector<Tuning> tunings;
+        ScoreUtils::load(file, "tunings", tunings);
+        return tunings;
     }
-    catch (const std::exception &e)
-    {
-        qDebug() << "Error loading tuning dictionary.";
-        qDebug() << "Exception: " << e.what();
-    }
+
+    throw std::runtime_error("Could not locate tuning dictionary.");
 }
 
 void TuningDictionary::save() const
 {
-    try
-    {
-        QStringList paths = availablePaths();
-        for (int i = paths.size() - 1; i >= 0; --i)
-        {
-            const QString &path = paths[i];
+    auto dir = Paths::getUserDataDir();
+    boost::filesystem::create_directories(dir);
 
-            // Ensure the directory exists first.
-            if (!QDir().mkpath(QFileInfo(path).path()))
-                continue;
+    auto path = dir / theTuningDictFilename;
+    boost::filesystem::ofstream file(path);
+    if (!file)
+        throw std::runtime_error("Error opening file for writing.");
 
-            std::ofstream file(path.toLocal8Bit().constData());
-            if (!file)
-                continue;
-
-            QMutexLocker lock(&myMutex);
-            ScoreUtils::save(file, "tunings", myTunings);
-            break;
-        }
-    }
-    catch (const std::exception &e)
-    {
-        qDebug() << "Error saving tuning dictionary.";
-        qDebug() << "Exception: " << e.what();
-    }
+    ensureLoaded();
+    ScoreUtils::save(file, "tunings", myTunings);
 }
 
 void TuningDictionary::loadInBackground()
 {
-    QtConcurrent::run(this, &TuningDictionary::load);
+    myFuture = std::async(std::launch::async, &TuningDictionary::load);
 }
 
 void TuningDictionary::findTunings(int numStrings,
                                    std::vector<Tuning *> &tunings)
 {
+    ensureLoaded();
     for (Tuning &tuning : myTunings)
     {
         if (tuning.getStringCount() == numStrings)
@@ -98,6 +77,7 @@ void TuningDictionary::findTunings(int numStrings,
 void TuningDictionary::findTunings(int numStrings,
                                    std::vector<const Tuning *> &tunings) const
 {
+    ensureLoaded();
     for (const Tuning &tuning : myTunings)
     {
         if (tuning.getStringCount() == numStrings)
@@ -107,21 +87,22 @@ void TuningDictionary::findTunings(int numStrings,
 
 void TuningDictionary::addTuning(const Tuning &tuning)
 {
+    ensureLoaded();
     myTunings.push_back(tuning);
 }
 
 void TuningDictionary::removeTuning(const Tuning &tuning)
 {
+    ensureLoaded();
     myTunings.erase(std::remove(myTunings.begin(), myTunings.end(), tuning));
 }
 
-QStringList TuningDictionary::availablePaths()
+void TuningDictionary::ensureLoaded() const
 {
-    QStringList paths = QStandardPaths::standardLocations(QStandardPaths::DataLocation);
-    paths.append(QCoreApplication::applicationDirPath() + "/data");
-
-    for (QString &path : paths)
-        path.append("/tunings.json");
-
-    return paths;
+    if (myFuture.valid())
+    {
+        // myTunings shouldn't be mutable in general.
+        auto me = const_cast<TuningDictionary *>(this);
+        me->myTunings = myFuture.get();
+    }
 }

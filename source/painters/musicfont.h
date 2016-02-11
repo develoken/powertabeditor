@@ -28,8 +28,6 @@ class QGraphicsSimpleTextItem;
 class MusicFont
 {
 public:
-    MusicFont();
-
     /// All of the available music symbols.
     enum MusicSymbol
     {
@@ -75,6 +73,8 @@ public:
         FlagDown2 = 0xe1a1,
         FlagDown3 = 0xe1a2,
         FlagDown4 = 0xe1a3,
+        GraceNoteSlashUp = 0xe19f,
+        GraceNoteSlashDown = 0xe1a0,
         HarmonicNoteHeadOpen = 0xe1d4,
         HarmonicNoteHeadFull = 0xe1d5,
         Coda = 0xe181,
@@ -85,13 +85,9 @@ public:
     };
 
     static const int DEFAULT_FONT_SIZE = 22;
+    static const int GRACE_NOTE_SIZE = 15;
 
-    void setSymbol(QGraphicsSimpleTextItem *text, MusicSymbol identifier,
-                   int size = DEFAULT_FONT_SIZE);
-    const QFont& getFont() const;
-
-private:
-    QFont musicNotationFont;
+    static QFont getFont(int pixel_size);
 };
 
 #endif

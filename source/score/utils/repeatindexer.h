@@ -18,7 +18,9 @@
 #ifndef SCORE_UTILS_REPEATINDEXER_H
 #define SCORE_UTILS_REPEATINDEXER_H
 
-#include <boost/optional/optional.hpp>
+#include <boost/optional.hpp>
+#include <boost/range/iterator_range.hpp>
+#include <map>
 #include <score/systemlocation.h>
 #include <set>
 #include <unordered_map>
@@ -59,10 +61,17 @@ public:
     /// Attempt to find the location to jump to for the nth alternate ending.
     boost::optional<SystemLocation> findAlternateEnding(int number) const;
 
+    /// Reset the repeat counters.
+    void reset();
+    int getCurrentRepeatNumber() const { return myActiveRepeat; }
+    SystemLocation performRepeat(const SystemLocation &loc);
+
 private:
     SystemLocation myStartBarLocation;
     std::map<SystemLocation, int> myRepeatEndBars;
     std::unordered_map<int, SystemLocation> myAlternateEndings;
+    std::unordered_map<SystemLocation, int> myRemainingRepeats;
+    int myActiveRepeat;
 };
 
 class RepeatIndexer
@@ -75,6 +84,7 @@ public:
     /// Given a location in the score, find the repeat that
     /// surrounds it (if possible).
     const RepeatedSection *findRepeat(const SystemLocation &loc) const;
+    RepeatedSection *findRepeat(const SystemLocation &loc);
 
     /// Returns a list of the repeated sections in the score.
     boost::iterator_range<RepeatedSectionIterator> getRepeats() const;
